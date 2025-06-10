@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>I&n Industries | Topología SDN Interactiva</title>
+  <script src="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.js"></script>
+  <link href="https://unpkg.com/vis-network@9.1.2/dist/vis-network.min.css" rel="stylesheet" />
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: #f4f7fb;
+    }
+    header {
+      background: #1a1f36;
+      padding: 1.5em;
+      color: white;
+      text-align: center;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.8em;
+    }
+    .legend, #controls, #balanceo, #servidores {
+      max-width: 700px;
+      margin: 1em auto;
+      background: white;
+      padding: 1em;
+      border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      font-size: 0.95em;
+    }
+    .legend .color-box {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border-radius: 4px;
+      margin-right: 0.5em;
+    }
+    #network {
+      height: 600px;
+      margin: 2em auto;
+      max-width: 90%;
+      border: 2px solid #ccc;
+      border-radius: 8px;
+      background: white;
+    }
+    .footer {
+      text-align: center;
+      font-size: 0.9em;
+      color: #999;
+      margin: 2em;
+    }
+    button {
+      margin-right: 0.5em;
+      margin-top: 0.5em;
+      padding: 0.4em 1em;
+      background: #1a1f36;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #2d3650;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>I&n Industries | Visualizador de Red SDN</h1>
+  </header>
+
+  <div class="legend">
+    <strong>Colores por Tipo de Nodo:</strong>
+    <p><span class="color-box" style="background:#0077cc"></span>Switch</p>
+    <p><span class="color-box" style="background:#cccccc"></span>Host</p>
+    <p><span class="color-box" style="background:#66bb6a"></span>Servidor Encendido</p>
+    <p><span class="color-box" style="background:#ff4444"></span>Servidor Apagado</p>
+    <p><span class="color-box" style="background:#0000FF"></span>Ruta Calculada</p>
+    <strong>Colores por Ancho de Banda:</strong>
+    <p><span class="color-box" style="background:#FF0000"></span>10 Mbps o menos</p>
+    <p><span class="color-box" style="background:#FFA500"></span>100 Mbps</p>
+    <p><span class="color-box" style="background:#00AA00"></span>1 Gbps o más</p>
+    <div id="ruta_resultado" style="text-align:center; font-weight:bold; margin-top:1em;"></div>
+  </div>
+
+  <div id="controls">
+    <label for="algoritmo">Selecciona algoritmo de enrutamiento:</label>
+    <select id="algoritmo">
+      <option value="dijkstra">Dijkstra (por ancho de banda)</option>
+      <option value="shortest">Shortest Path (por saltos)</option>
+    </select>
+  </div>
+
+  <div id="balanceo">
+    <label for="tipo_balanceo">Selecciona tipo de balanceo:</label>
+    <select id="tipo_balanceo">
+      <option value="rr">Round Robin</option>
+      <option value="wrr">Weighted Round Robin</option>
+    </select>
+    <button onclick="asignarServidor()">Asignar servidor</button>
+    <p id="servidor_asignado" style="margin-top:1em; font-weight:bold;"></p>
+  </div>
+
+  <div id="servidores">
+    <p><strong>Servidores VLC:</strong></p>
+    <button onclick="toggleServidor('h1')">Alternar h1</button>
+    <button onclick="toggleServidor('h2')">Alternar h2</button>
+    <button onclick="toggleServidor('h3')">Alternar h3</button>
+  </div>
+
+  <div id="network"></div>
+  <div id="ruta_resultado" style="text-align:center; font-weight:bold; margin-top:1em; font-size:1.1em;"></div>
+
+  <div id="notificacion" style="text-align:center; font-weight:bold; margin-top:1em;"></div>
+
+  <div class="footer">
+    © 2025 I&n Industries · Plataforma SDN Interactiva
+  </div>
+
+  <script>
+    let network;
+    let grafoData;
+    let origen = null, destino = null;
+    const estadoServidores = { h1: true, h2: true, h3: true };
+
+    fetch("http://192.168.1.13/grafo-json")
+      .then(res => res.json())
+      .then(data => {
+        grafoData = data;
+        const container = document.getElementById("network");
+        const options = {
+          nodes: {
+            shape: "dot",
+            size: 16,
+            font: { size: 14, face: "Tahoma" },
+          },
+          edges: {
+            arrows: "to",
+            smooth: false
+          },
+          physics: {
+            enabled: true,
+            stabilization: true
+          }
+        };
+        network = new vis.Network(container, data, options);
+
+        network.on("click", function (params) {
+          if (params.nodes.length && params.nodes[0].startsWith("h")) {
+            if (!origen) {
+              origen = params.nodes[0];
+              document.getElementById("notificacion").innerText = "Host origen seleccionado: " + origen;
+            } else {
+              destino = params.nodes[0];
+              document.getElementById("notificacion").innerText = "Host destino seleccionado: " + destino;
+
+              const algoritmo = document.getElementById("algoritmo").value;
+
+              fetch("http://192.168.1.13/instalar-ruta", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ host_origen: origen, host_destino: destino, algoritmo })
+              })
+              .then(res => res.json())
+              .then(result => {
+                if (result.ruta) {
+                  const ruta = result.ruta;
+                  document.getElementById("ruta_resultado").innerText = "Ruta: " + ruta.join(" ➝ ");
+                  // Restaurar colores originales
+                  const resetEdges = grafoData.edges.map(edge => ({
+                    ...edge,
+                    width: 2
+                  }));
+
+                  // Resaltar ruta
+                  const newEdges = resetEdges.map(edge => {
+                    if (ruta.includes(edge.from) && ruta.includes(edge.to)) {
+                      return { ...edge, color: { color: "#0000FF" }, width: 4 };
+                      
+                    }
+                    return edge;
+                  });
+
+                  network.setData({ nodes: grafoData.nodes, edges: newEdges });
+                } else {
+                  document.getElementById("notificacion").innerText = "No se encontró ruta";
+                }
+                origen = null;
+                destino = null;
+              })
+              .catch(() => {
+                document.getElementById("notificacion").innerText = "Error consultando el servidor.";
+                origen = null;
+                destino = null;
+              });
+            }
+          }
+        });
+      });
+
+    function asignarServidor() {
+      const tipo = document.getElementById("tipo_balanceo").value;
+      fetch("http://192.168.1.13/balancear", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tipo })
+      })
+      .then(res => res.json())
+      .then(data => {
+        document.getElementById("servidor_asignado").innerText = "Servidor asignado: " + data.servidor;
+      })
+      .catch(() => {
+        document.getElementById("servidor_asignado").innerText = "Error al consultar el servidor.";
+      });
+    }
+
+    function toggleServidor(host) {
+      estadoServidores[host] = !estadoServidores[host];
+      const color = estadoServidores[host] ? "#66bb6a" : "#ff4444";
+      const nodo = network.body.data.nodes.get(host);
+      network.body.data.nodes.update({ id: host, color });
+    }
+  </script>
+</body>
+</html>
